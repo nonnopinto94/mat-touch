@@ -4,4 +4,4 @@ __pycache__/
 venv/
 models/*
 !models/.gitkeep
-Istruzioni Claude/
+Istruzione Claude/
