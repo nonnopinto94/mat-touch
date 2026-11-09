@@ -18,4 +18,4 @@ Base repo creata:
 
 ## Ambiente / problemi aperti
 - Python 3.12.3. `tkinter` NON installato: serve `sudo apt install python3-tk`.
-- `LICENSE` nella repo è **Apache 2.0**, il brief dice MIT: da decidere con l'utente.
+- `LICENSE`: MIT (scelta dall'utente, sostituita la Apache 2.0 iniziale).
