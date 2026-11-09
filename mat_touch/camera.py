@@ -10,9 +10,13 @@ def list_cameras() -> list[tuple[str, str]]:
     for d in sorted(Path("/sys/class/video4linux").glob("video*"), key=lambda p: int(p.name[5:])):
         # shortcut: index 0 = main capture node on UVC webcams (others are metadata); probe with
         # VIDIOC_QUERYCAP if a camera ever shows up wrong.
-        if (d / "index").read_text().strip() != "0":
+        try:
+            if (d / "index").read_text().strip() != "0":
+                continue
+            name = (d / "name").read_text().strip()
+        except OSError:  # some capture cards / virtual cameras lack these files
             continue
-        cams.append((f"/dev/{d.name}", (d / "name").read_text().strip()))
+        cams.append((f"/dev/{d.name}", name))
     return cams
 
 

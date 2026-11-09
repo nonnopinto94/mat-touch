@@ -1,4 +1,4 @@
-opencv-python
+opencv-contrib-python  # not opencv-python: mediapipe depends on contrib, both install cv2
 mediapipe
 numpy
 pillow

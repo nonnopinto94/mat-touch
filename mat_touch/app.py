@@ -2,21 +2,25 @@
 
 Step 1: pick the webcam and click the 4 corners of the projected area.
 Step 2: connect to a browser tab via Chrome DevTools Protocol.
-Step 3: running. For now (M2) clicking the preview sends a touch to the page.
+Step 3: running: detected hands/feet become touches; clicking the preview sends a test touch.
 """
+import queue
 import shutil
 import tkinter as tk
 from tkinter import messagebox, ttk
 
 import cv2
+import numpy as np
 from PIL import Image, ImageTk
 
 from . import calibration, camera, config
+from .pipeline import MOUSE_ID, Pipeline
 from .outputs import cdp
 
 PREVIEW_W = 960   # max preview width in screen pixels
 GRAB_R = 12       # click radius (screen px) to grab an existing point
 FRAME_MS = 30
+DETECTORS = {"Pose (corpo)": "pose", "Mani": "hands"}
 LABELS = ["TL", "TR", "BR", "BL"]
 # Snap Chromium cannot write hidden dirs in $HOME: it silently falls back to the personal profile.
 _SNAP = (shutil.which("chromium") or "").startswith("/snap/")
@@ -106,7 +110,7 @@ class Step1(ttk.Frame):
         self.points = []
         self.status["text"] = self.app.open_camera(self.app.cams[self.cam_box.current()][0])
 
-    def draw_overlay(self):
+    def draw_overlay(self, _points, _touches):
         if len(self.points) == 4:
             self.preview.draw_quad(calibration.order_corners(self.points))
         for p in self.points:
@@ -131,7 +135,7 @@ class Step1(ttk.Frame):
         self.status["text"] = ""
 
     def confirm(self):
-        if self.app.cap is None:
+        if self.app.pipe is None:
             self.status["text"] = "Nessuna webcam aperta"
             return
         try:
@@ -203,7 +207,7 @@ class Step2(ttk.Frame):
             self.status["text"] = "Collega e scegli una scheda"
             return
         try:
-            self.app.set_output(cdp.CdpOutput(self.pages[sel[0]]["webSocketDebuggerUrl"]))
+            self.app.set_output(cdp.CdpOutput(self.pages[sel[0]]["webSocketDebuggerUrl"], on_command=self.app.commands.put))
         except OSError as e:
             self.status["text"] = str(e)
             return
@@ -220,12 +224,39 @@ class Step3(ttk.Frame):
     def __init__(self, app):
         super().__init__(app.root, padding=8)
         self.app = app
-        self.corners = app.cfg.corners
+        cfg = app.cfg
+        self.corners = cfg.corners
         self.h = calibration.homography(self.corners)
+        self.h_inv = np.linalg.inv(self.h)
         self.touch = None  # camera point of the mouse test touch
+        if app.pipe is not None:
+            app.pipe.homography = self.h
+            app.pipe.output = app.output
 
-        ttk.Label(self, text="Test senza visione: clicca e trascina sull'anteprima "
-                             "per toccare la pagina.").pack(anchor="w", pady=4)
+        top = ttk.Frame(self)
+        top.pack(fill="x")
+        self.pause_btn = tk.Button(top, font=("TkDefaultFont", 14, "bold"), width=16,
+                                   command=app.toggle_pause)
+        self.pause_btn.pack(side="left")
+        self.update_pause()
+        ttk.Label(top, text="Rilevamento:").pack(side="left", padx=(12, 0))
+        self.det_box = ttk.Combobox(top, state="readonly", width=14, values=list(DETECTORS))
+        names = list(DETECTORS.values())
+        self.det_box.current(names.index(cfg.detector) if cfg.detector in names else 0)
+        self.det_box.bind("<<ComboboxSelected>>", self.on_detector)
+        self.det_box.pack(side="left", padx=4)
+        self.on_detector(None)
+
+        sliders = ttk.Frame(self)
+        sliders.pack(fill="x", pady=4)
+        self.slider(sliders, "Confidenza minima", "min_confidence", 0.0, 1.0)
+        self.slider(sliders, "Fotogrammi per entrare", "frames_in", 1, 6, integer=True)
+        self.slider(sliders, "per uscire", "frames_out", 1, 15, integer=True)
+        self.slider(sliders, "Smoothing (Hz, basso = più liscio)", "filter_min_cutoff", 0.1, 5.0)
+
+        ttk.Label(self, text="Punti: verde = dentro l'area, grigio = fuori. Cerchi rossi = tocchi inviati. "
+                             "Test senza visione: clicca e trascina sull'anteprima. "
+                             "Nella pagina: Ctrl+Alt+P pausa, Ctrl+Alt+Q esci.").pack(anchor="w", pady=4)
         self.preview = Preview(self)
         self.preview.pack()
         self.preview.bind("<ButtonPress-1>", self.on_mouse)
@@ -239,28 +270,60 @@ class Step3(ttk.Frame):
         self.status = ttk.Label(bottom, text="")
         self.status.pack(side="left", padx=8)
 
-    def draw_overlay(self):
-        self.preview.draw_quad(self.corners)
-        if self.touch:
-            self.preview.dot(self.touch, "red", 10)
+    def slider(self, parent, text, attr, lo, hi, integer=False):
+        """Labeled slider bound to a cfg attribute; the pipeline reads cfg live."""
+        cfg = self.app.cfg
+        var = tk.DoubleVar(value=getattr(cfg, attr))
+        fmt = (lambda v: f"{v:d}") if integer else (lambda v: f"{v:.2f}")
+        value = ttk.Label(parent, text=fmt(getattr(cfg, attr)), width=5)
+
+        def changed(_v):
+            v = round(var.get()) if integer else round(var.get(), 2)
+            setattr(cfg, attr, v)
+            value["text"] = fmt(v)
+
+        ttk.Label(parent, text=text).pack(side="left", padx=(0, 2))
+        ttk.Scale(parent, from_=lo, to=hi, variable=var, length=110, command=changed).pack(side="left")
+        value.pack(side="left", padx=(2, 10))
+
+    def update_pause(self):
+        paused = self.app.pipe is not None and self.app.pipe.paused
+        self.pause_btn.config(text="Riprendi tocchi" if paused else "Pausa tocchi",
+                              bg="orange" if paused else "lightgreen")
+
+    def on_detector(self, _e):
+        self.app.cfg.detector = DETECTORS[self.det_box.get()]
+
+    def draw_overlay(self, points, touches):
+        pv = self.preview
+        pv.draw_quad(self.corners)
+        for x, y, label in points:
+            u, v = calibration.to_projection(self.h, (x, y))
+            color = "lime" if 0 <= u <= 1 and 0 <= v <= 1 else "gray"
+            pv.dot((x, y), color, 6)
+            sx, sy = pv.to_screen((x, y))
+            pv.create_text(sx, sy - 14, text=label, fill=color)
+        pipe = self.app.pipe
+        color = "orange" if pipe is not None and pipe.paused else "red"
+        for tid, (u, v) in touches.items():
+            p = calibration.to_projection(self.h_inv, (u, v))
+            pv.dot(p, color, 14)
+            sx, sy = pv.to_screen(p)
+            pv.create_text(sx + 22, sy, text="mouse" if tid == MOUSE_ID else str(tid),
+                           fill=color, font=("TkDefaultFont", 11, "bold"))
+        if pipe is not None:
+            state = "IN PAUSA – " if pipe.paused else ""
+            self.status["text"] = state + (pipe.send_error or pipe.error or
+                                           f"{pipe.fps:.0f} fps, {len(touches)} tocchi")
 
     def on_mouse(self, e):
-        p = self.preview.to_norm(e)
-        u, v = calibration.to_projection(self.h, p)
-        inside = 0 <= u <= 1 and 0 <= v <= 1
-        self.touch = p if inside else None
-        self.send({0: (u, v)} if inside else {})
+        u, v = calibration.to_projection(self.h, self.preview.to_norm(e))
+        if self.app.pipe is not None:
+            self.app.pipe.mouse = (u, v) if 0 <= u <= 1 and 0 <= v <= 1 else None
 
     def on_release(self, _e):
-        self.touch = None
-        self.send({})
-
-    def send(self, touches):
-        try:
-            self.app.output.send(touches)
-            self.status["text"] = ""
-        except OSError as e:
-            self.status["text"] = f"{e} – usa 'Cambia scheda' per ricollegarti"
+        if self.app.pipe is not None:
+            self.app.pipe.mouse = None
 
 
 class App:
@@ -268,11 +331,12 @@ class App:
         self.root = root
         self.cfg = config.load()
         self.cams = camera.list_cameras()
-        self.cap = None
+        self.pipe = None
         self.device = None
         self.camera_error = ""
         self.output = None
         self.step = None
+        self.commands = queue.Queue()  # from the page (CDP binding thread) to the UI thread
 
         devices = [d for d, _ in self.cams]
         if not devices:
@@ -280,7 +344,7 @@ class App:
         else:
             self.camera_error = self.open_camera(self.cfg.camera if self.cfg.camera in devices else devices[0])
 
-        saved = valid_corners(self.cfg.corners) and self.device == self.cfg.camera and self.cap is not None
+        saved = valid_corners(self.cfg.corners) and self.device == self.cfg.camera and self.pipe is not None
         if saved and messagebox.askyesno("mat-touch", "Usare la calibrazione salvata?"):
             self.show(Step2)
         else:
@@ -290,42 +354,64 @@ class App:
 
     def open_camera(self, device) -> str:
         """Open the webcam; return an error message, or "" on success."""
-        if self.cap is not None:
-            self.cap.release()
-            self.cap = None
+        if self.pipe is not None:
+            self.pipe.stop()
+            self.pipe = None
         self.device = device
         try:
-            self.cap = camera.open_camera(device)
+            self.pipe = Pipeline(device, self.cfg)
         except OSError as e:
             return str(e)
+        self.pipe.output = self.output
         return ""
 
     def show(self, step_cls):
         if self.step is not None:
             self.step.destroy()
+        if self.pipe is not None:
+            self.pipe.running = step_cls is Step3  # detect and send touches only while running
+            self.pipe.mouse = None
         self.step = step_cls(self)
         self.step.pack(fill="both", expand=True)
 
     def set_output(self, output):
-        if self.output is not None:
-            self.output.close()
-        self.output = output
+        old, self.output = self.output, output
+        if self.pipe is not None:
+            self.pipe.output = output
+        if old is not None:
+            old.close()
+
+    def toggle_pause(self):
+        if self.pipe is not None:
+            self.pipe.paused = not self.pipe.paused
+        if isinstance(self.step, Step3):
+            self.step.update_pause()
 
     def tick(self):
-        # shortcut: read() blocks the UI for up to one frame; move capture to a thread in M3.
+        while not self.commands.empty():
+            cmd = self.commands.get()
+            if cmd == "pause":
+                self.toggle_pause()
+            elif cmd == "quit":
+                self.quit()
+                return
         preview = getattr(self.step, "preview", None)
-        if self.cap is not None and preview is not None:
-            ok, frame = self.cap.read()
-            if ok:
+        if self.pipe is not None and preview is not None:
+            frame, points, touches = self.pipe.latest()
+            if frame is not None:
                 preview.show(frame)
-                self.step.draw_overlay()
+                self.step.draw_overlay(points, touches)
         self.root.after(FRAME_MS, self.tick)
 
     def quit(self):
+        if self.pipe is not None:
+            self.pipe.stop()  # stop the sender before closing its output
         if self.output is not None:
             self.output.close()
-        if self.cap is not None:
-            self.cap.release()
+        try:
+            config.save(self.cfg)  # keep detector/slider choices
+        except OSError:
+            pass
         self.root.destroy()
 
 

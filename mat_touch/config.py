@@ -11,11 +11,14 @@ class Config:
     camera: str = "/dev/video0"
     corners: list | None = None  # 4 [x, y] normalized camera coords [0,1], ordered TL, TR, BR, BL
     cdp_port: int = 9222
+    detector: str = "pose"  # "pose" or "hands"
+    feet: bool = True       # pose only: feet are touch points too
     min_confidence: float = 0.5
     frames_in: int = 2   # consecutive frames before a touch starts
     frames_out: int = 5  # missing frames before a touch ends
-    filter_min_cutoff: float = 1.0  # One Euro
-    filter_beta: float = 0.0        # One Euro
+    filter_min_cutoff: float = 1.0  # One Euro, Hz: lower = smoother but laggier when slow
+    filter_beta: float = 1.0        # One Euro: higher = less lag on fast moves (units: area/s)
+    margin: float = 0.05  # points this far outside the projected area still count (clamped)
 
 
 def load(path: Path = CONFIG_PATH) -> Config:

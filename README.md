@@ -4,7 +4,7 @@ A "virtual touchscreen" for projected surfaces. A webcam watches the projected a
 
 It works with any web page that accepts touch input. Its first client is an interactive koi pond projected on a child's play mattress.
 
-> Status: in development. Milestones M1 (camera + calibration) and M2 (browser connection) are done. Hand/foot detection is not implemented yet. See [Roadmap](#roadmap).
+> Status: in development. M1–M4 are done: calibration, browser connection, hand/foot detection and live multitouch. Still to do: the pond fork (M5) and the launch script with reconnection (M6). See [Roadmap](#roadmap).
 
 ## How it works
 
@@ -15,8 +15,8 @@ webcam ──> detection ──> calibration ──> tracking ──> CDP ──
 ```
 
 1. **Calibration**: you click the 4 corners of the projected area in the webcam image. mat-touch computes a homography from camera coordinates to the projected area.
-2. **Detection** *(M3, planned)*: MediaPipe Pose (or Hands) finds hands and feet in each frame.
-3. **Tracking** *(M4, planned)*: points get stable ids, debouncing and One Euro smoothing.
+2. **Detection**: MediaPipe Pose (or Hands) finds hands and feet in each frame. Capture and detection run in a background thread, so the UI never blocks.
+3. **Tracking**: points inside the calibrated area get stable ids (greedy nearest-neighbour matching). A touch starts after N consecutive frames and ends after M missing frames. A One Euro filter smooths each touch.
 4. **Output**: touches are injected into a single browser tab via CDP. For the page they are indistinguishable from a real touchscreen: it receives Touch Events and Pointer Events with `pointerType: "touch"`.
 
 ### Why CDP instead of a system-wide virtual touchscreen
@@ -87,9 +87,46 @@ If a valid calibration is saved, mat-touch asks whether to reuse it and skips to
 - **Avanti** connects to the chosen tab and enables touch emulation on it (`maxTouchPoints: 10`).
 
 **Step 3: running**
-- The preview shows the calibrated area.
+- Detected hands and feet become touches in the page.
+- The preview shows:
+  - the calibrated area;
+  - the detected points with their labels, green inside the area and gray outside;
+  - the touches being sent, as red circles with their id (orange while paused).
+- The status bar shows the fps and the number of touches.
+- **Pausa tocchi / Riprendi tocchi**: big button that stops sending touches. All fingers are lifted at once; detection keeps running.
+- **Rilevamento** picks the detector:
+  - *Pose (corpo)*, the default, uses the body pose. Hand = mean of wrist, index and pinky; foot = toe. It works well with an oblique camera that sees the child almost from the front.
+  - *Mani* uses the hand model and gives the palm center. Use it when the camera is close to the mat.
+- Sliders, applied live:
+  - **Confidenza minima** drops points below that confidence (Pose: landmark visibility; Hands: handedness score).
+  - **Fotogrammi per entrare** sets how many consecutive frames a point needs before its touch starts.
+  - **per uscire** sets how many missing frames end a touch.
+  - **Smoothing** is the One Euro minimum cutoff in Hz. Lower is smoother but laggier.
+- On first use, the MediaPipe model (~9 MB) is downloaded into `models/`. This needs an internet connection once.
 - *Test without vision*: click and drag on the preview to touch the page at the matching point. This checks calibration and connection without detection. Leaving the area or releasing the mouse lifts the finger.
 - **Ricalibra** goes back to step 1. **Cambia scheda** goes back to step 2, which you also use to reconnect if the browser restarts.
+
+Touches are sent only while step 3 is open. Leaving it lifts all fingers.
+
+### Keyboard shortcuts in the page
+
+These work while the browser tab has focus, for example in kiosk mode on the projector:
+
+| Keys | Action |
+|---|---|
+| `Ctrl+Alt+P` | Pause / resume touches |
+| `Ctrl+Alt+Q` | Quit mat-touch |
+
+### Page hardening
+
+On connection, mat-touch injects a small script into the tab, including every future reload or navigation. It works with any page:
+
+- it blocks the context menu, so a long press opens no menu;
+- it blocks text selection and dragging;
+- it sets `touch-action: none` on the document;
+- it forwards the keyboard shortcuts through a CDP binding (`window.matTouchCommand`).
+
+Any script in the page can call that binding too. So a page can pause or quit mat-touch, but it can do nothing else.
 
 The UI is in Italian, since the end users are Italian.
 
@@ -102,9 +139,22 @@ Settings are saved in `~/.config/mat-touch/config.json`:
 | `camera` | Webcam device, e.g. `/dev/video0` |
 | `corners` | 4 corners `[x, y]` in normalized camera coordinates `[0,1]` (TL, TR, BR, BL). These are resolution-independent and in the same space as MediaPipe landmarks. |
 | `cdp_port` | Chromium remote debugging port |
-| `min_confidence`, `frames_in`, `frames_out`, `filter_min_cutoff`, `filter_beta` | Detection and tracking parameters (used from M3/M4) |
+| `detector` | `pose` or `hands` |
+| `feet` | Pose only: also use the feet as touch points (default `true`) |
+| `min_confidence` | Minimum point confidence, set with the slider |
+| `frames_in`, `frames_out` | Frames to start / end a touch |
+| `filter_min_cutoff`, `filter_beta` | One Euro filter: minimum cutoff (Hz) and speed coefficient. `filter_beta` is in the config only. |
+| `margin` | Points this far outside the area (as a fraction of its size) still count, clamped to the edge. Default `0.05`. |
 
 A missing or corrupt file falls back to defaults.
+
+## Performance
+
+Measured on an i5-8250U laptop with a 640×480 webcam:
+
+- Pose takes about 75 ms per frame with nobody in view and about 170 ms with a person. That is roughly 5–6 fps.
+- Hands takes about 130 ms per frame.
+- Cheap webcams with automatic exposure also drop to about 6 fps in dim light. Lock the exposure with `v4l2-ctl` (see the project brief).
 
 ## Testing without a projector
 
@@ -119,6 +169,7 @@ Unit tests:
 
 ```sh
 python -m tests.test_calibration
+python -m tests.test_tracker
 ```
 
 ## CDP touch semantics
@@ -141,6 +192,13 @@ mat_touch/
   camera.py          webcam listing and opening (V4L2)
   calibration.py     corner ordering, homography, saving
   config.py          ~/.config/mat-touch/config.json
+  pipeline.py        background thread: capture, detection, mapping, tracking, sending
+  tracker.py         stable ids, debouncing
+  filters.py         One Euro filter
+  detectors/
+    base.py          Detector interface, model download
+    pose.py          MediaPipe PoseLandmarker
+    hands.py         MediaPipe HandLandmarker
   outputs/
     base.py          OutputBackend interface; touches are normalized [0,1] in the projected area
     cdp.py           Chrome DevTools Protocol backend
@@ -156,8 +214,9 @@ scripts/             launch scripts (planned)
 
 - [x] **M1**: camera and calibration
 - [x] **M2**: CDP connection, test page, click-on-preview touches
-- [ ] **M3**: detection with MediaPipe Pose (then Hands), drawn on the preview
-- [ ] **M4**: tracking, debouncing, One Euro filter, live multitouch, page hardening script, keyboard shortcuts, pause button
+- [x] **M3**: detection with MediaPipe Pose and Hands, drawn on the preview
+- [x] **M4**: tracking, debouncing, One Euro filter, live multitouch, page hardening script, keyboard shortcuts, pause button
+- [ ] **M5**: pond fork (separate repository)
 - [ ] **M6**: `scripts/start.sh`, automatic reconnection, webcam v4l2 settings
 
 ## License
