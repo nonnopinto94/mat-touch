@@ -1,7 +1,8 @@
 """Output backend interface: where touches go (CDP today, maybe uinput later)."""
 from abc import ABC, abstractmethod
 
-# Active touches: stable touch id -> (x, y) in page CSS pixels.
+# Active touches: stable touch id -> (x, y) normalized in the projected area [0,1]x[0,1].
+# Each backend scales to its own space (CDP: page CSS pixels).
 Touches = dict[int, tuple[float, float]]
 
 

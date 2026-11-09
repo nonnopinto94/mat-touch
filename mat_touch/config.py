@@ -9,7 +9,7 @@ CONFIG_PATH = Path.home() / ".config" / "mat-touch" / "config.json"
 @dataclass
 class Config:
     camera: str = "/dev/video0"
-    corners: list | None = None  # 4 [x, y] camera points, ordered TL, TR, BR, BL
+    corners: list | None = None  # 4 [x, y] normalized camera coords [0,1], ordered TL, TR, BR, BL
     cdp_port: int = 9222
     min_confidence: float = 0.5
     frames_in: int = 2   # consecutive frames before a touch starts

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mat-touch test</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #111; touch-action: none; user-select: none; }
+  canvas { display: block; }
+  #info { position: fixed; top: 8px; left: 8px; color: #ccc; font: 14px monospace; white-space: pre; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info"></div>
+<script>
+// Draws every active touch with its id, position and last event type.
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const info = document.getElementById("info");
+const touches = new Map(); // identifier -> {x, y, type}
+const log = [];
+
+function resize() { canvas.width = innerWidth; canvas.height = innerHeight; }
+addEventListener("resize", resize);
+resize();
+
+function onTouch(e) {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    if (e.type === "touchend" || e.type === "touchcancel") touches.delete(t.identifier);
+    else touches.set(t.identifier, { x: t.clientX, y: t.clientY, type: e.type });
+  }
+  if (e.type !== "touchmove") {
+    log.unshift(`${e.type} [${[...e.changedTouches].map(t => t.identifier)}] active=${e.touches.length}`);
+    log.length = Math.min(log.length, 12);
+  }
+}
+for (const type of ["touchstart", "touchmove", "touchend", "touchcancel"])
+  addEventListener(type, onTouch, { passive: false });
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = "#444";
+  ctx.strokeRect(0.5, 0.5, canvas.width - 1, canvas.height - 1);
+  ctx.font = "16px monospace";
+  for (const [id, t] of touches) {
+    ctx.fillStyle = `hsl(${id * 67 % 360} 80% 60%)`;
+    ctx.beginPath();
+    ctx.arc(t.x, t.y, 40, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.fillText(`#${id} ${Math.round(t.x)},${Math.round(t.y)} ${t.type}`, t.x + 46, t.y + 5);
+  }
+  info.textContent = `viewport ${innerWidth}x${innerHeight}  maxTouchPoints ${navigator.maxTouchPoints}\n` +
+    `active ${touches.size}\n\n` + log.join("\n");
+  requestAnimationFrame(draw);
+}
+draw();
+</script>
+</body>
+</html>
