@@ -13,19 +13,31 @@ It was built to let a toddler play with a koi pond ([hush-pond-webcam](https://g
 
 ## Requirements
 
-- Linux with an X11 session
-- Python 3.10+ with Tkinter (`python3-tk`)
-- Chromium or Google Chrome
+- Windows, macOS or Linux
+- Python 3.10–3.12 with Tkinter. The python.org installers for Windows and macOS include Tkinter. On Linux, install `python3-tk`.
+- Google Chrome, Chromium or Microsoft Edge
 - A USB webcam. For the real setup, mount it right next to the projector lens, pointing the same way, so a raised hand is seen and lit along nearly the same line.
 
 ## Install
 
+Linux and macOS:
+
 ```bash
-sudo apt install python3-tk python3-venv
 git clone https://github.com/nonnopinto94/mat-touch.git
 cd mat-touch
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+```
+
+On Debian/Ubuntu, first run `sudo apt install python3-tk python3-venv`.
+
+Windows (PowerShell):
+
+```powershell
+git clone https://github.com/nonnopinto94/mat-touch.git
+cd mat-touch
+py -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
 ```
 
 The first time you start detection, mat-touch downloads the MediaPipe model (~9 MB) into `models/`.
@@ -36,10 +48,31 @@ The first time you start detection, mat-touch downloads the MediaPipe model (~9 
 
 ```bash
 git clone https://github.com/nonnopinto94/hush-pond-webcam.git
-cd hush-pond-webcam && python3 -m http.server 8417
+cd hush-pond-webcam
+python3 -m http.server 8417
 ```
 
-**2. Start Chromium with remote debugging and a separate profile.** On Ubuntu Chromium is a snap, and a snap can't use hidden folders in your home. If you point `--user-data-dir` into `~/.config`, it ignores the path and opens your **personal profile** instead. So use:
+On Windows, use `py` instead of `python3`.
+
+**2. Start the browser with remote debugging and a separate profile.** Always use a separate profile, never your everyday one. The debugging port only listens on `127.0.0.1`.
+
+Windows:
+
+```powershell
+& "C:\Program Files\Google\Chrome\Application\chrome.exe" --user-data-dir="$env:LOCALAPPDATA\mat-touch\chrome" --remote-debugging-port=9222 "http://localhost:8417/?mode=mat"
+```
+
+For Edge, use `"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"` with the same flags.
+
+macOS:
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --user-data-dir="$HOME/Library/Application Support/mat-touch/chrome" \
+  --remote-debugging-port=9222 "http://localhost:8417/?mode=mat"
+```
+
+Linux. On Ubuntu Chromium is a snap, and a snap can't use hidden folders in your home. If you point `--user-data-dir` into `~/.config`, it ignores the path and opens your **personal profile** instead. So use:
 
 ```bash
 chromium --user-data-dir="$HOME/snap/chromium/common/mat-touch" \
@@ -53,14 +86,17 @@ On the projector, add `--kiosk --no-first-run --noerrdialogs --disable-pinch --o
 **3. Start mat-touch:**
 
 ```bash
-.venv/bin/python -m mat_touch
+.venv/bin/python -m mat_touch          # Linux, macOS
+.venv\Scripts\python -m mat_touch      # Windows
 ```
+
+On macOS, the first start asks for camera access for your terminal. Allow it.
 
 ## Using it
 
 The wizard has three steps. It remembers everything, and next time it offers to reuse the saved calibration.
 
-1. **Calibrate.** Pick the webcam, then click the four corners of the projected image, in any order. Drag a corner to fix it.
+1. **Calibrate.** Pick the webcam, then click the four corners of the projected image, in any order. Drag a corner to fix it. On Windows and macOS webcams show up as *Webcam 0*, *Webcam 1*… because OpenCV can't read their names. Try them in turn.
 2. **Connect.** Press *Collega* (connect). mat-touch lists the open tabs on port 9222. Pick one and press *Avanti* (next). If no browser answers, it shows the command to start one.
 3. **Play.** The preview shows what mat-touch sees:
    - green dots are detected hands and feet inside the area;
@@ -92,14 +128,14 @@ These work in the browser tab, including in kiosk mode:
 
 | Keys | Action |
 | --- | --- |
-| `Ctrl+Alt+P` | Pause / resume touches |
-| `Ctrl+Alt+Q` | Quit mat-touch |
+| `Ctrl+Alt+P` (macOS: `Ctrl+Option+P`) | Pause / resume touches |
+| `Ctrl+Alt+Q` (macOS: `Ctrl+Option+Q`) | Quit mat-touch |
 
 mat-touch also blocks the context menu, text selection and dragging in the page, so a long press doesn't open anything.
 
 ### Configuration
 
-Settings live in `~/.config/mat-touch/config.json` and are written by the wizard. A few have no slider:
+Settings live in `~/.config/mat-touch/config.json` (on Windows `%USERPROFILE%\.config\mat-touch\config.json`) and are written by the wizard. A few have no slider:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -109,7 +145,7 @@ Settings live in `~/.config/mat-touch/config.json` and are written by the wizard
 
 ### Troubleshooting
 
-- **Slow detection.** On a laptop i5-8250U, Pose runs at about 5 fps and Hands at about 7. Cheap webcams also slow down in dim light because of auto exposure. Lock exposure with `v4l2-ctl --list-ctrls`, then `v4l2-ctl -c <control>=<value>`.
+- **Laggy touches.** Check the delay and fps in the step 3 status bar. On a laptop i5-8250U with a 720p USB webcam, Pose runs at about 12 fps with about 100 ms of delay. Built-in laptop webcams are often stuck at 7–8 fps, and many webcams slow down in dim light because of auto exposure. On Linux you can lock exposure with `v4l2-ctl --list-ctrls`, then `v4l2-ctl -c <control>=<value>`.
 - **"Nessun browser sulla porta 9222".** Chromium isn't running with `--remote-debugging-port`, or another Chromium using the same profile was already open. Close it and start again.
 - **Touches land in the wrong place.** Recalibrate (*Ricalibra*) after moving the camera or the projector. Turn off projector keystone if you can: calibration handles the distortion.
 

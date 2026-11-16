@@ -6,6 +6,7 @@ Step 3: running: detected hands/feet become touches; clicking the preview sends 
 """
 import queue
 import shutil
+import sys
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -22,10 +23,18 @@ GRAB_R = 12       # click radius (screen px) to grab an existing point
 FRAME_MS = 30
 DETECTORS = {"Pose (corpo)": "pose", "Mani": "hands"}
 LABELS = ["TL", "TR", "BR", "BL"]
-# Snap Chromium cannot write hidden dirs in $HOME: it silently falls back to the personal profile.
-_SNAP = (shutil.which("chromium") or "").startswith("/snap/")
-PROFILE_DIR = "$HOME/snap/chromium/common/mat-touch" if _SNAP else "$HOME/.config/mat-touch/chromium"
-CHROMIUM_CMD = f'chromium --user-data-dir="{PROFILE_DIR}" --remote-debugging-port={{port}} <url>'
+if sys.platform == "win32":
+    CHROMIUM_CMD = (r'"C:\Program Files\Google\Chrome\Application\chrome.exe" '
+                    r'--user-data-dir="%LOCALAPPDATA%\mat-touch\chrome" --remote-debugging-port={port} <url>')
+elif sys.platform == "darwin":
+    CHROMIUM_CMD = ('"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" '
+                    '--user-data-dir="$HOME/Library/Application Support/mat-touch/chrome" '
+                    '--remote-debugging-port={port} <url>')
+else:
+    # Snap Chromium cannot write hidden dirs in $HOME: it silently falls back to the personal profile.
+    _SNAP = (shutil.which("chromium") or "").startswith("/snap/")
+    _PROFILE = "$HOME/snap/chromium/common/mat-touch" if _SNAP else "$HOME/.config/mat-touch/chromium"
+    CHROMIUM_CMD = f'chromium --user-data-dir="{_PROFILE}" --remote-debugging-port={{port}} <url>'
 
 
 def valid_corners(c) -> bool:
@@ -314,7 +323,7 @@ class Step3(ttk.Frame):
         if pipe is not None:
             state = "IN PAUSA – " if pipe.paused else ""
             self.status["text"] = state + (pipe.send_error or pipe.error or
-                                           f"{pipe.fps:.0f} fps, {len(touches)} tocchi")
+                                           f"{pipe.fps:.0f} fps, ritardo {pipe.latency * 1000:.0f} ms, {len(touches)} tocchi")
 
     def on_mouse(self, e):
         u, v = calibration.to_projection(self.h, self.preview.to_norm(e))

@@ -41,10 +41,16 @@ class Pipeline(threading.Thread):
         self.error = ""
         self.send_error = ""
         self.fps = 0.0
+        self.latency = 0.0  # seconds from frame capture to touch sent
         self.tracker = Tracker()
+        # Capture runs in its own thread so detection always gets the newest frame and the
+        # camera wait overlaps detection instead of adding to it.
+        self._frame = (None, 0.0, 0)  # frame, capture time, sequence number
+        self._frame_cond = threading.Condition()
         self._lock = threading.Lock()
         self._latest = (None, [], {})
         self._stop_event = threading.Event()
+        threading.Thread(target=self._grab, daemon=True).start()
         self.start()
 
     def latest(self):
@@ -61,17 +67,38 @@ class Pipeline(threading.Thread):
                 out.append((min(max(u, 0.0), 1.0), min(max(v, 0.0), 1.0)))
         return out
 
+    def _grab(self):
+        seq = 0
+        while not self._stop_event.is_set():
+            ok, frame = self.cap.read()
+            if not ok:
+                time.sleep(0.1)
+                continue
+            seq += 1
+            with self._frame_cond:
+                self._frame = (frame, time.monotonic(), seq)
+                self._frame_cond.notify()
+        self.cap.release()
+
     def run(self):
         current_name, det = None, None
         failed_name = None  # don't retry a broken detector every frame
         last_ts, last_t = 0, time.monotonic()
         sent, sent_t, sent_output = {}, 0.0, None
+        seen_seq = 0
         while not self._stop_event.is_set():
-            ok, frame = self.cap.read()
-            if not ok:
+            with self._frame_cond:
+                self._frame_cond.wait_for(lambda: self._frame[2] != seen_seq or self._stop_event.is_set(),
+                                          timeout=1.0)
+                frame, grabbed_t, seq = self._frame
+            if self._stop_event.is_set():
+                break
+            if seq == seen_seq:
                 self.error = "Nessun fotogramma dalla webcam"
-                time.sleep(0.1)
                 continue
+            seen_seq = seq
+            if self.error == "Nessun fotogramma dalla webcam":
+                self.error = ""
             cfg = self.cfg
             name = cfg.detector if self.running and self.homography is not None else None
             if name != current_name and name != failed_name:
@@ -113,13 +140,15 @@ class Pipeline(threading.Thread):
                 sent, sent_t = wanted, now
 
             self.fps = 0.9 * self.fps + 0.1 / max(now - last_t, 1e-3)
+            self.latency = 0.9 * self.latency + 0.1 * (time.monotonic() - grabbed_t)
             last_t = now
             with self._lock:
                 self._latest = (frame, points, touches)
         if det is not None:
             det.close()
-        self.cap.release()
 
     def stop(self):
         self._stop_event.set()
+        with self._frame_cond:
+            self._frame_cond.notify()
         self.join(timeout=2)
